@@ -1,0 +1,4 @@
+*.o
+edf/cksum
+edf/ti_cat
+gaz/receive_gaz_pulses
