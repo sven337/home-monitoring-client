@@ -8,7 +8,7 @@ all: ${PROGRAMS}
 
 ${PROGRAMS}: ${SOURCES}
 #	g++ ${CCFLAGS} -Wall -L../librf24/  -lrf24 $@.cpp -o $@
-	g++ ${CCFLAGS} -I./librf24 -L/usr/local/lib  -lrf24 $@.cpp -o $@
+	g++ ${CCFLAGS} -I./librf24 -L/usr/local/lib  -lrf24-bcm $@.cpp -o $@
 
 clean:
 	rm -rf $(PROGRAMS)

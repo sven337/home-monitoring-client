@@ -23,6 +23,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <unistd.h>
 #include "RF24.h"
 
 using namespace std;
@@ -35,8 +36,9 @@ static enum { EMONCMS, DOMAH } OUTPUT_MODE;
 const uint64_t pipes[6] = { 0xF0F0F0F0F1LL, 0xF0F0F0F0F0LL, 0xF0F0F0F0A1LL, 0xF0F0F0F0A2LL, 0xF0F0F0F0A3, 0xF0F0F0F0A4 };
 
 // CE and CSN pins On header using GPIO numbering (not pin numbers)
-RF24 radio("/dev/spidev0.0",8000000,18);  // Setup for GPIO 25 CSN
-
+//RF24 radio("/dev/spidev0.0",8000000,18);  // Setup for GPIO 25 CSN
+//RF24 radio("/dev/spidev0.0",8000000,18);  // Setup for GPIO 25 CSN
+RF24 radio(18, 8, BCM2835_SPI_SPEED_8MHZ);
 
 void setup(void)
 {
@@ -85,7 +87,7 @@ void loop(void)
 				printf("gas/pulse/%d\n",*((uint16_t *)receivePayload)); 
 				break;
 		}
-		radio.flush_tx();
+//		radio.flush_tx();
 //		radio.flush_rx();
 
 
