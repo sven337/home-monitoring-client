@@ -1,6 +1,6 @@
 #!/bin/bash
 
-FILE=/sys/bus/w1/devices/28-000004dccc84/w1_slave
+FILE=/sys/bus/w1/devices/28-00000*/w1_slave
 
 if [ ! -r $FILE ]; then
 	exit 1
