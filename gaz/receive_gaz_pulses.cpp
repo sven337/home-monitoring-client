@@ -38,7 +38,7 @@ const uint64_t pipes[6] = { 0xF0F0F0F0F1LL, 0xF0F0F0F0F0LL, 0xF0F0F0F0A1LL, 0xF0
 // CE and CSN pins On header using GPIO numbering (not pin numbers)
 //RF24 radio("/dev/spidev0.0",8000000,18);  // Setup for GPIO 25 CSN
 //RF24 radio("/dev/spidev0.0",8000000,18);  // Setup for GPIO 25 CSN
-RF24 radio(18, 8, BCM2835_SPI_SPEED_8MHZ);
+RF24 radio(8, 18, BCM2835_SPI_SPEED_8MHZ);
 
 void setup(void)
 {
