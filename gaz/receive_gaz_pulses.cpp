@@ -33,7 +33,7 @@ static enum { EMONCMS, DOMAH } OUTPUT_MODE;
 
 // Radio pipe addresses for the 2 nodes to communicate.
 // First pipe is for writing, 2nd, 3rd, 4th, 5th & 6th is for reading...
-const uint64_t pipes[6] = { 0xF0F0F0F0F1LL, 0xF0F0F0F0F0LL, 0xF0F0F0F0A1LL, 0xF0F0F0F0A2LL, 0xF0F0F0F0A3, 0xF0F0F0F0A4 };
+const uint64_t pipes[6] = { 0xF0F0F0F0F1LL, 0xF0F0F0F0F0LL, 0xF0F0F0F0F2LL, 0xF0F0F0F0A2LL, 0xF0F0F0F0A3, 0xF0F0F0F0A4 };
 
 // CE and CSN pins On header using GPIO numbering (not pin numbers)
 //RF24 radio("/dev/spidev0.0",8000000,18);  // Setup for GPIO 25 CSN
@@ -68,17 +68,18 @@ void setup(void)
 	usleep(1000);
 }
 
-void send_led_strip(uint8_t param)
+void send_rf24_cmd(uint64_t addr, uint8_t param)
 {
 	uint8_t payload[4];
 	payload[0] = param;
 
 	radio.stopListening();
+	radio.openWritingPipe(addr);
 	radio.powerUp();
 	if (radio.write(&payload[0], 4)) {
 		fprintf(stderr, "Send successful\n");
 	} else {
-		fprintf(stderr, "Could not send to LED strip\n");
+		fprintf(stderr, "Could not send RF24 cmd\n");
 		radio.printDetails();
 		setup();
 		radio.powerDown();
@@ -105,10 +106,17 @@ void led_strip_command(char *cmdbuf)
 	unsigned int i;
 	for (i = 0; i < sizeof(led_strip_commands)/sizeof(led_strip_commands[0]); i++) {
 		if (!strncmp(led_strip_commands[i].cmd, p, strlen(led_strip_commands[i].cmd))) {
-			send_led_strip(led_strip_commands[i].param);
+			send_rf24_cmd(pipes[0], led_strip_commands[i].param);
 			return;
 		}
 	}
+}
+
+void led_lamp_command(char *cmdbuf)
+{
+	char *p = cmdbuf + strlen("LEDLAMP ");
+	int val = atoi(p);
+	send_rf24_cmd(pipes[2], val);
 }
 
 void loop(void)
@@ -139,6 +147,8 @@ void loop(void)
 
 		if (!strncmp(cmdbuf, "LEDSTRIP ", strlen("LEDSTRIP "))) {
 			led_strip_command(cmdbuf);
+		} else if (!strncmp(cmdbuf, "LEDLAMP ", strlen("LEDLAMP "))) {
+			led_lamp_command(cmdbuf);
 		}
 	}
 
