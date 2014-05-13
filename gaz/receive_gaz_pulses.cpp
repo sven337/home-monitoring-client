@@ -35,6 +35,13 @@ static enum { EMONCMS, DOMAH } OUTPUT_MODE;
 // First pipe is for writing, 2nd, 3rd, 4th, 5th & 6th is for reading...
 const uint64_t pipes[6] = { 0xF0F0F0F0F1LL, 0xF0F0F0F0F0LL, 0xF0F0F0F0F2LL, 0xF0F0F0F0A2LL, 0xF0F0F0F0A3, 0xF0F0F0F0A4 };
 
+const uint64_t pipe_gaz 	 = 0xF0F0F0F0F0LL;
+const uint64_t pipe_ledstrip = 0xF0F0F0F0F1LL;
+const uint64_t pipe_ledlamp  = 0xF0F0F0F0F2LL;
+#define PIPE_GAZ_ID 1
+#define PIPE_LEDSTRIP_ID 2
+#define PIPE_LEDLAMP_ID 3
+
 // CE and CSN pins On header using GPIO numbering (not pin numbers)
 //RF24 radio("/dev/spidev0.0",8000000,18);  // Setup for GPIO 25 CSN
 //RF24 radio("/dev/spidev0.0",8000000,18);  // Setup for GPIO 25 CSN
@@ -47,19 +54,16 @@ void setup(void)
 	radio.begin();
 //	radio.enableDynamicPayloads();
 	radio.setPayloadSize(4);
-	radio.setAutoAck(false);
+	radio.setAutoAck(true);
 	radio.setRetries(15,15);
 	radio.setDataRate(RF24_250KBPS);
 	radio.setPALevel(RF24_PA_MAX);
 	radio.setChannel(95);
-	radio.setCRCLength(RF24_CRC_16);
+//	radio.setCRCLength(RF24_CRC_16);
 
-	radio.openWritingPipe(pipes[0]);
-	radio.openReadingPipe(1,pipes[1]);
-
-	//
-	// Dump the configuration of the rf unit for debugging
-	//
+	radio.openReadingPipe(PIPE_GAZ_ID, pipe_gaz);
+	radio.openReadingPipe(PIPE_LEDSTRIP_ID, pipe_ledstrip);
+	radio.openReadingPipe(PIPE_LEDLAMP_ID, pipe_ledlamp);
 
 	// Start Listening
 	radio.startListening();
@@ -72,10 +76,14 @@ void send_rf24_cmd(uint64_t addr, uint8_t param)
 {
 	uint8_t payload[4];
 	payload[0] = param;
+	payload[1] = param;
+	payload[2] = param;
+	payload[3] = param;
 
 	radio.stopListening();
+	usleep(10000);
 	radio.openWritingPipe(addr);
-	radio.powerUp();
+	usleep(10000);
 	if (radio.write(&payload[0], 4)) {
 		fprintf(stderr, "Send successful\n");
 	} else {
@@ -86,7 +94,7 @@ void send_rf24_cmd(uint64_t addr, uint8_t param)
 		usleep(1000);
 		radio.powerUp();
 	}
-	usleep(1000);
+	usleep(10000);
 	radio.startListening();
 }
 
@@ -121,23 +129,35 @@ void led_lamp_command(char *cmdbuf)
 
 void loop(void)
 {
-	char receivePayload[33];
+	char data[33];
 	uint8_t pipe = 1;
 	struct pollfd input = { 0, POLLIN, 0 };
 	char cmdbuf[150];
 
-	 while ( radio.available( &pipe ) ) {
+	 while (radio.available(&pipe)) {
 
-		radio.read( receivePayload, 4);
+		radio.read(data, 4);
 
-		// Display it on screen
-		switch (OUTPUT_MODE) {
-			case EMONCMS:
-				printf("appart.GAZ_PULSE:%d\n",*((uint16_t *)receivePayload));
+		switch (pipe) {
+			case PIPE_GAZ_ID:
+				// Display it on screen
+				switch (OUTPUT_MODE) {
+					case EMONCMS:
+						printf("appart.GAZ_PULSE:%d\n",*((uint16_t *)data));
+						break;
+					case DOMAH:
+						printf("gas/pulse/%d\n",*((uint16_t *)data)); 
+						break;
+				}
 				break;
-			case DOMAH:
-				printf("gas/pulse/%d\n",*((uint16_t *)receivePayload)); 
+			case PIPE_LEDSTRIP_ID:
+				printf("Ledstrip says %c %c %dc %c\n", data[0], data[1], data[2], data[3]);
 				break;
+			case PIPE_LEDLAMP_ID:
+				printf("Ledstrip says %c %c %dc %c\n", data[0], data[1], data[2], data[3]);
+				break;
+			default:
+				printf("Received message on unknown pipe id %d: %c %c %c %c\n", data[0], data[1], data[2], data[3]);
 		}
 	}
 
