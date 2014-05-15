@@ -31,10 +31,6 @@ using namespace std;
 
 static enum { EMONCMS, DOMAH } OUTPUT_MODE;
 
-// Radio pipe addresses for the 2 nodes to communicate.
-// First pipe is for writing, 2nd, 3rd, 4th, 5th & 6th is for reading...
-const uint64_t pipes[6] = { 0xF0F0F0F0F1LL, 0xF0F0F0F0F0LL, 0xF0F0F0F0F2LL, 0xF0F0F0F0A2LL, 0xF0F0F0F0A3, 0xF0F0F0F0A4 };
-
 const uint64_t pipe_gaz 	 = 0xF0F0F0F0F0LL;
 const uint64_t pipe_ledstrip = 0xF0F0F0F0F1LL;
 const uint64_t pipe_ledlamp  = 0xF0F0F0F0F2LL;
@@ -45,21 +41,19 @@ const uint64_t pipe_ledlamp  = 0xF0F0F0F0F2LL;
 // CE and CSN pins On header using GPIO numbering (not pin numbers)
 //RF24 radio("/dev/spidev0.0",8000000,18);  // Setup for GPIO 25 CSN
 //RF24 radio("/dev/spidev0.0",8000000,18);  // Setup for GPIO 25 CSN
-RF24 radio(8, 18, BCM2835_SPI_SPEED_4MHZ);
+RF24 radio(BCM2835_SPI_CS_GPIO18, 8, BCM2835_SPI_SPEED_8MHZ);
 
 void setup(void)
 {
 	//
 	// Refer to RF24.h or nRF24L01 DS for settings
 	radio.begin();
-//	radio.enableDynamicPayloads();
 	radio.setPayloadSize(4);
 	radio.setAutoAck(true);
 	radio.setRetries(15,15);
 	radio.setDataRate(RF24_250KBPS);
 	radio.setPALevel(RF24_PA_MAX);
 	radio.setChannel(95);
-//	radio.setCRCLength(RF24_CRC_16);
 
 	radio.openReadingPipe(PIPE_GAZ_ID, pipe_gaz);
 	radio.openReadingPipe(PIPE_LEDSTRIP_ID, pipe_ledstrip);
@@ -80,22 +74,22 @@ void send_rf24_cmd(uint64_t addr, uint8_t param)
 	payload[2] = param;
 	payload[3] = param;
 
+	printf("send rf24\n");
 	radio.stopListening();
-	usleep(10000);
+	usleep(1000);
 	radio.openWritingPipe(addr);
-	usleep(10000);
-	if (radio.write(&payload[0], 4)) {
+	radio.powerUp();
+	usleep(1000);
+	bool ok = radio.write(&payload[0], 4);
+	usleep(1000);
+
+	if (ok) {
 		fprintf(stderr, "Send successful\n");
 	} else {
 		fprintf(stderr, "Could not send RF24 cmd\n");
-		radio.printDetails();
-		setup();
-		radio.powerDown();
-		usleep(1000);
-		radio.powerUp();
 	}
-	usleep(10000);
 	radio.startListening();
+	usleep(10000);
 }
 
 void led_strip_command(char *cmdbuf)
@@ -114,7 +108,7 @@ void led_strip_command(char *cmdbuf)
 	unsigned int i;
 	for (i = 0; i < sizeof(led_strip_commands)/sizeof(led_strip_commands[0]); i++) {
 		if (!strncmp(led_strip_commands[i].cmd, p, strlen(led_strip_commands[i].cmd))) {
-			send_rf24_cmd(pipes[0], led_strip_commands[i].param);
+			send_rf24_cmd(pipe_ledstrip, led_strip_commands[i].param);
 			return;
 		}
 	}
@@ -124,12 +118,70 @@ void led_lamp_command(char *cmdbuf)
 {
 	char *p = cmdbuf + strlen("LEDLAMP ");
 	int val = atoi(p);
-	send_rf24_cmd(pipes[2], val);
+	send_rf24_cmd(pipe_ledlamp, val);
+}
+
+void ledstrip_reply(uint8_t *p)
+{
+#define UNK  printf("Unknown ledstrip reply %c %c %c %c\n", p[0], p[1], p[2], p[3]);
+}
+
+void ledlamp_reply(uint8_t *p)
+{
+#undef UNK
+#define UNK  printf("Unknown ledlamp reply %c %c %c %c\n", p[0], p[1], p[2], p[3]);
+	switch (p[0]) {
+		case 'T':
+			// thermal event
+			switch (p[1]) {
+				case 'E':
+					printf("Ledlamp thermal emergency, temp is %d\n", p[2] | p[3] << 8);
+					break;
+				case 'A':
+					printf("Ledlamp thermal alarm, temp is %d\n", p[2] | p[3] << 8);
+					break;
+				case '0':
+					printf("Ledlamp thermal stand down from alarm, temp is %d\n", p[2] | p[3] << 8);
+					break;
+				default:
+					UNK
+			};
+			break;
+		case 'R':
+			// remote command reply
+			switch (p[1]) {
+				case 'O':
+					printf("Ledlamp remote reply: lamp is off\n");
+					break;
+				case '1':
+					printf("Ledlamp remote reply: lamp is on, light level target %d\n", p[2] | p[3] << 8);
+					break;
+				default:
+					UNK
+			};
+			break;
+		case 'L':
+			// light level event
+			switch (p[1]) {
+				case 'I':
+					printf("Ledlamp increased power, duty cycle %d\n", p[2]);
+					break;
+				case 'D':
+					printf("Ledlamp decreased power, duty cycle %d\n", p[2]);
+					break;
+				default:
+					UNK
+			};
+			break;
+		default:
+			UNK
+	}
+		
 }
 
 void loop(void)
 {
-	char data[33];
+	uint8_t data[4];
 	uint8_t pipe = 1;
 	struct pollfd input = { 0, POLLIN, 0 };
 	char cmdbuf[150];
@@ -151,13 +203,13 @@ void loop(void)
 				}
 				break;
 			case PIPE_LEDSTRIP_ID:
-				printf("Ledstrip says %c %c %dc %c\n", data[0], data[1], data[2], data[3]);
+				ledstrip_reply(data);
 				break;
 			case PIPE_LEDLAMP_ID:
-				printf("Ledstrip says %c %c %dc %c\n", data[0], data[1], data[2], data[3]);
+				ledlamp_reply(data);
 				break;
 			default:
-				printf("Received message on unknown pipe id %d: %c %c %c %c\n", data[0], data[1], data[2], data[3]);
+				printf("Received message on unknown pipe id %d: %c %c %c %c\n", pipe, data[0], data[1], data[2], data[3]);
 		}
 	}
 
