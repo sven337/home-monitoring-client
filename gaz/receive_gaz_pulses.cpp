@@ -66,13 +66,13 @@ void setup(void)
 	usleep(1000);
 }
 
-void send_rf24_cmd(uint64_t addr, uint8_t param)
+void send_rf24_cmd(uint64_t addr, uint8_t param0, uint8_t param1, uint8_t param2, uint8_t param3)
 {
 	uint8_t payload[4];
-	payload[0] = param;
-	payload[1] = param;
-	payload[2] = param;
-	payload[3] = param;
+	payload[0] = param0;
+	payload[1] = param1;
+	payload[2] = param2;
+	payload[3] = param3;
 
 	printf("send rf24\n");
 	radio.stopListening();
@@ -97,18 +97,21 @@ void led_strip_command(char *cmdbuf)
 	char *p = cmdbuf + strlen("LEDSTRIP ");
 	struct { 
 		const char *cmd;
-		int param;
+		uint8_t p0;
+		uint8_t p1;
 	} led_strip_commands[] = {
-			{ "strobe", 3 },
-			{ "sunrise", 1 },
-			{ "sunset" , 2 },
-			{ "stop" , 0 },
+			{ "strobe", 'S', 3 },
+			{ "sunrise", 'S', 1 },
+			{ "sunset" , 'S', 2 },
+			{ "stop" , 'S', 0 },
+			{ "fast" , 'F', 0 },
+			{ "query", 'L', 0 },
 	};
 
 	unsigned int i;
 	for (i = 0; i < sizeof(led_strip_commands)/sizeof(led_strip_commands[0]); i++) {
 		if (!strncmp(led_strip_commands[i].cmd, p, strlen(led_strip_commands[i].cmd))) {
-			send_rf24_cmd(pipe_ledstrip, led_strip_commands[i].param);
+			send_rf24_cmd(pipe_ledstrip, led_strip_commands[i].p0, led_strip_commands[i].p1, 0, 0);
 			return;
 		}
 	}
@@ -118,12 +121,28 @@ void led_lamp_command(char *cmdbuf)
 {
 	char *p = cmdbuf + strlen("LEDLAMP ");
 	int val = atoi(p);
-	send_rf24_cmd(pipe_ledlamp, val);
+	send_rf24_cmd(pipe_ledlamp, val, 0, 0, 0);
 }
 
 void ledstrip_reply(uint8_t *p)
 {
 #define UNK  printf("Unknown ledstrip reply %c %c %c %c\n", p[0], p[1], p[2], p[3]);
+	switch (p[0]) {
+		case 'S':
+			// sequence feedback
+			printf("Ledstrip playing sequence %d, at %d seconds\n", p[1], p[2] | p[3] << 8);
+			break;
+		case 'F':
+			// fast mode
+			printf("Ledstrip fast mode = %d\n", p[1]);
+			break;
+		case 'L':
+			// light level event
+			printf("Ledstrip duty cycle %d %d %d\n", p[1], p[2], p[3]);
+			break;
+		default:
+			UNK
+	}
 }
 
 void ledlamp_reply(uint8_t *p)
@@ -142,6 +161,9 @@ void ledlamp_reply(uint8_t *p)
 					break;
 				case '0':
 					printf("Ledlamp thermal stand down from alarm, temp is %d\n", p[2] | p[3] << 8);
+					break;
+				case 'N':
+					printf("Ledlamp thermal notify: temp is %d\n", p[2] | p[3] << 8);
 					break;
 				default:
 					UNK
