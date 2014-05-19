@@ -121,7 +121,12 @@ void led_lamp_command(char *cmdbuf)
 {
 	char *p = cmdbuf + strlen("LEDLAMP ");
 	int val = atoi(p);
-	send_rf24_cmd(pipe_ledlamp, val, 0, 0, 0);
+
+	if (!strncmp(p, "query", strlen("query"))) {
+		send_rf24_cmd(pipe_ledlamp, 'Q', 0, 0, 0);
+	} else {
+		send_rf24_cmd(pipe_ledlamp, 'L', val, 0, 0);
+	}
 }
 
 void ledstrip_reply(uint8_t *p)
@@ -182,8 +187,8 @@ void ledlamp_reply(uint8_t *p)
 					UNK
 			};
 			break;
-		case 'L':
-			// light level event
+		case 'D':
+			// light duty cycle event
 			switch (p[1]) {
 				case 'I':
 					printf("Ledlamp increased power, duty cycle %d\n", p[2]);
@@ -191,10 +196,24 @@ void ledlamp_reply(uint8_t *p)
 				case 'D':
 					printf("Ledlamp decreased power, duty cycle %d\n", p[2]);
 					break;
+				case 'N':
+					printf("Ledlamp current duty cycle notify: %d\n", p[2]);
+					break;
 				default:
 					UNK
 			};
 			break;
+		case 'L':
+			// light level event
+			switch (p[1]) {
+				case 'N':
+					printf("Ledlamp current light level notify: %d\n", p[2]);
+					break;
+				default:
+					UNK
+			}
+			break;
+
 		default:
 			UNK
 	}
