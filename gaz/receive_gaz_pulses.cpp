@@ -29,8 +29,6 @@
 
 using namespace std;
 
-static enum { EMONCMS, DOMAH } OUTPUT_MODE;
-
 const uint64_t pipe_gaz 	 = 0xF0F0F0F0F0LL;
 const uint64_t pipe_ledstrip = 0xF0F0F0F0F1LL;
 const uint64_t pipe_ledlamp  = 0xF0F0F0F0F2LL;
@@ -226,6 +224,7 @@ void loop(void)
 	uint8_t pipe = 1;
 	struct pollfd input = { 0, POLLIN, 0 };
 	char cmdbuf[150];
+	char gas_cmd[400];
 
 	 while (radio.available(&pipe)) {
 
@@ -233,16 +232,9 @@ void loop(void)
 
 		switch (pipe) {
 			case PIPE_GAZ_ID:
-				// Display it on screen
-				switch (OUTPUT_MODE) {
-					case EMONCMS:
-						printf("appart.GAZ_PULSE:%d\n",*((uint16_t *)data));
-						break;
-					case DOMAH:
-						printf("gas/pulse/%d\n",*((uint16_t *)data)); 
-						break;
-				}
-				break;
+				sprintf(gas_cmd, "curl -s http://192.168.1.6:5000/update/gas/pulse/%d\n", *((uint16_t *)data));
+				printf("gas/pulse/%d\n",*((uint16_t *)data)); 
+				system(gas_cmd);
 			case PIPE_LEDSTRIP_ID:
 				ledstrip_reply(data);
 				break;
@@ -274,9 +266,6 @@ int main(int argc, char** argv)
     setvbuf(stdin, NULL, _IONBF, 0);
 	setvbuf(stdout, NULL, _IONBF, 0);
 
-	if (argc == 2 && !strcmp(argv[1], "--emoncms"))
-		OUTPUT_MODE = EMONCMS;
-	else OUTPUT_MODE = DOMAH;
 	setup();
 	while(1)
 		loop();
