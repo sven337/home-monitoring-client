@@ -1,33 +1,23 @@
-/* 
- *
- *  Filename : rpi-hub.cpp
- *
- *  This program makes the RPi as a hub listening to all six pipes from the remote 
- *  sensor nodes ( usually Arduino  or RPi ) and will return the packet back to the 
- *  sensor on pipe0 so that the sender can calculate the round trip delays
- *  when the payload matches.
- *  
- *  Refer to RF24/examples/rpi_hub_arduino/ for the corresponding Arduino sketches 
- * to work with this code.
- *  
- *  CE is connected to GPIO25
- *  CSN is connected to GPIO8 
- *
- *  Refer to RPi docs for GPIO numbers
- *
- *  Author : Stanley Seow
- *  e-mail : stanleyseow@gmail.com
- *  date   : 4th Apr 2013
- *
- */
-
+#include <stdlib.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <stdio.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#include <string.h>
 #include <cstdlib>
 #include <iostream>
 #include <unistd.h>
 #include <poll.h>
+#include <errno.h>
 #include "RF24.h"
 
 using namespace std;
+
+const int PORT = 45888;
+int sockfd; // UDP socket
+struct sockaddr_in *clients[10];
 
 const uint64_t pipe_gaz 	 = 0xF0F0F0F0F0LL;
 const uint64_t pipe_ledstrip = 0xF0F0F0F0F1LL;
@@ -40,8 +30,6 @@ const uint64_t pipe_mailbox  = 0xF0F0F0F0F3LL;
 #define PIPE_MAILBOX_ID 4
 
 // CE and CSN pins On header using GPIO numbering (not pin numbers)
-//RF24 radio("/dev/spidev0.0",8000000,18);  // Setup for GPIO 25 CSN
-//RF24 radio("/dev/spidev0.0",8000000,18);  // Setup for GPIO 25 CSN
 RF24 radio(BCM2835_SPI_CS_GPIO18, 8, BCM2835_SPI_SPEED_2MHZ);
 
 void setup(void)
@@ -275,12 +263,78 @@ void ledlamp_reply(uint8_t *p)
 		
 }
 
+int find_client(unsigned long addr)
+{
+	unsigned int i;
+	for (i = 0; i < sizeof(clients)/sizeof(clients[0]); i++) {
+		if (!clients[i]) {
+			continue;
+		} 
+
+		if (clients[i]->sin_addr.s_addr == addr) {
+			return i;
+		}
+	}
+
+	return -1;
+}
+
+int add_client(struct sockaddr_in *si)
+{
+	unsigned int i;
+	int index = find_client(si->sin_addr.s_addr);
+	if (index != -1)
+		// Client already registered, nothing to do
+		return 1;
+
+	for (i = 0; i < sizeof(clients)/sizeof(clients[0]); i++) {
+		if (!clients[i]) {
+			// Found a free slot
+			clients[i] = (struct sockaddr_in *)calloc(1, sizeof(struct sockaddr_in));
+			memcpy(clients[i], si, sizeof(struct sockaddr_in));
+			return 0;
+		}
+	}
+	return 0;
+}
+
+void read_client_command(int fd, char *buf, int sz) 
+{
+	struct sockaddr_in si_from;
+	int addr_len = sizeof(struct sockaddr_in);
+	int len = 0;
+	errno = 0;
+	len = recvfrom(fd, buf, sz, 0, (struct sockaddr *)&si_from, (socklen_t *)&addr_len);
+
+	if (len == -1) {
+		perror("recvfrom");
+		return;
+	}
+	buf[len] = 0;
+
+	printf("Got client command %s\n", buf);
+}
+
+void send_to_clients(const char *buf, int len)
+{
+	unsigned int i;
+	for (i = 0; i < sizeof(clients)/sizeof(clients[0]); i++) {
+		if (clients[i]) {
+			if (sendto(sockfd, buf, len, 0, (struct sockaddr *)clients[i], sizeof(struct sockaddr_in)) == -1) {
+				perror("sendto");
+				return;
+			}
+		}
+	}
+}
+
 void loop(void)
 {
 	uint8_t data[4];
 	uint8_t pipe = 1;
-	struct pollfd input = { 0, POLLIN, 0 };
+	struct pollfd input[] = {{ sockfd, POLLIN, 0 }};
 	char cmdbuf[150];
+	char buf[1000];
 	char gas_cmd[400];
 
 	 while (radio.available(&pipe)) {
@@ -290,8 +344,9 @@ void loop(void)
 		switch (pipe) {
 			case PIPE_GAZ_ID:
 				sprintf(gas_cmd, "curl -s http://192.168.1.6:5000/update/gas/pulse/%d\n", *((uint16_t *)data));
-				printf("gas/pulse/%d\n",*((uint16_t *)data)); 
 				system(gas_cmd);
+				snprintf(buf, 1000, "gas/pulse/%d\n",*((uint16_t *)data)); 
+				send_to_clients(buf, strlen(buf) + 1);
 				break;
 			case PIPE_LEDSTRIP_ID:
 				ledstrip_reply(data);
@@ -303,14 +358,14 @@ void loop(void)
 				mailbox_message(data);
 				break;
 			default:
-				printf("Received message on unknown pipe id %d: %c %c %c %c\n", pipe, data[0], data[1], data[2], data[3]);
+				fprintf(stderr, "Received message on unknown pipe id %d: %c %c %c %c\n", pipe, data[0], data[1], data[2], data[3]);
+				snprintf(buf, 1000, "Received message on unknown pipe id %d: %c %c %c %c\n", pipe, data[0], data[1], data[2], data[3]);
+				send_to_clients(buf, strlen(buf) + 1);
 		}
 	}
 
-	if (poll(&input, 1, 1)) {
-		if (!fgets(cmdbuf, sizeof(cmdbuf), stdin)) {
-			usleep(1000);
-		}
+	if (poll(&input[0], 1, 1)) {
+		read_client_command(sockfd, cmdbuf, sizeof(cmdbuf));
 
 		if (!strncmp(cmdbuf, "LEDSTRIP ", strlen("LEDSTRIP "))) {
 			led_strip_command(cmdbuf);
@@ -328,9 +383,32 @@ void loop(void)
 	usleep(1000);
 }
 
+int create_socket(void)
+{
+	struct sockaddr_in si_me;
+
+	sockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	if (sockfd == -1) {
+		perror("socket");
+		exit(1);
+	}
+
+	memset(&si_me, 0, sizeof(si_me));
+	si_me.sin_family = AF_INET;
+	si_me.sin_port = htons(PORT);
+	si_me.sin_addr.s_addr = htonl(INADDR_ANY);
+
+	if (bind(sockfd, (struct sockaddr *)&si_me, sizeof(si_me)) == -1) {
+		perror("bind");
+		exit(1);
+	}
+
+	return 0;
+}
 
 int main(int argc, char** argv) 
 {
+	create_socket();
     setvbuf(stdin, NULL, _IONBF, 0);
 	setvbuf(stdout, NULL, _IONBF, 0);
 
