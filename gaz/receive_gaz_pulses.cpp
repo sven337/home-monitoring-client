@@ -32,14 +32,17 @@ using namespace std;
 const uint64_t pipe_gaz 	 = 0xF0F0F0F0F0LL;
 const uint64_t pipe_ledstrip = 0xF0F0F0F0F1LL;
 const uint64_t pipe_ledlamp  = 0xF0F0F0F0F2LL;
+const uint64_t pipe_mailbox  = 0xF0F0F0F0F3LL;
+
 #define PIPE_GAZ_ID 1
 #define PIPE_LEDSTRIP_ID 2
 #define PIPE_LEDLAMP_ID 3
+#define PIPE_MAILBOX_ID 4
 
 // CE and CSN pins On header using GPIO numbering (not pin numbers)
 //RF24 radio("/dev/spidev0.0",8000000,18);  // Setup for GPIO 25 CSN
 //RF24 radio("/dev/spidev0.0",8000000,18);  // Setup for GPIO 25 CSN
-RF24 radio(BCM2835_SPI_CS_GPIO18, 8, BCM2835_SPI_SPEED_8MHZ);
+RF24 radio(BCM2835_SPI_CS_GPIO18, 8, BCM2835_SPI_SPEED_2MHZ);
 
 void setup(void)
 {
@@ -52,10 +55,14 @@ void setup(void)
 	radio.setDataRate(RF24_250KBPS);
 	radio.setPALevel(RF24_PA_MAX);
 	radio.setChannel(95);
+	radio.setCRCLength(RF24_CRC_16);
+	usleep(1000);
 
 	radio.openReadingPipe(PIPE_GAZ_ID, pipe_gaz);
 	radio.openReadingPipe(PIPE_LEDSTRIP_ID, pipe_ledstrip);
 	radio.openReadingPipe(PIPE_LEDLAMP_ID, pipe_ledlamp);
+	radio.openReadingPipe(PIPE_MAILBOX_ID, pipe_mailbox);
+	usleep(1000);
 
 	// Start Listening
 	radio.startListening();
@@ -64,30 +71,32 @@ void setup(void)
 	usleep(1000);
 }
 
-void send_rf24_cmd(uint64_t addr, uint8_t param0, uint8_t param1, uint8_t param2, uint8_t param3)
+int send_rf24_cmd(uint64_t addr, uint8_t param0, uint8_t param1, uint8_t param2, uint8_t param3)
 {
 	uint8_t payload[4];
+	int ret = -1;
 	payload[0] = param0;
 	payload[1] = param1;
 	payload[2] = param2;
 	payload[3] = param3;
 
-	printf("send rf24\n");
+	printf("send rf24...");
 	radio.stopListening();
 	usleep(1000);
 	radio.openWritingPipe(addr);
 	radio.powerUp();
 	usleep(1000);
 	bool ok = radio.write(&payload[0], 4);
-	usleep(1000);
 
 	if (ok) {
-		fprintf(stderr, "Send successful\n");
+		printf("... successful\n");
+		ret = 0;
 	} else {
-		fprintf(stderr, "Could not send RF24 cmd\n");
+		printf("... could not send RF24 cmd\n");
 	}
 	radio.startListening();
 	usleep(10000);
+	return ret;
 }
 
 void led_strip_command(char *cmdbuf)
@@ -98,6 +107,7 @@ void led_strip_command(char *cmdbuf)
 		uint8_t p0;
 		uint8_t p1;
 	} led_strip_commands[] = {
+			{ "fullpower", 'S', 4 },
 			{ "strobe", 'S', 3 },
 			{ "sunrise", 'S', 1 },
 			{ "sunset" , 'S', 2 },
@@ -119,11 +129,20 @@ void led_lamp_command(char *cmdbuf)
 {
 	char *p = cmdbuf + strlen("LEDLAMP ");
 	int val = atoi(p);
+	int retry = 3;
 
 	if (!strncmp(p, "query", strlen("query"))) {
-		send_rf24_cmd(pipe_ledlamp, 'Q', 0, 0, 0);
+		while (retry-- && send_rf24_cmd(pipe_ledlamp, 'Q', 0, 0, 0)) {
+			usleep(10000);
+		}
+	} else if (!strncmp(p, "fade", strlen("fade"))) {
+		while (retry-- && send_rf24_cmd(pipe_ledlamp, 'F', 0, 0, 0)) {
+			usleep(10000);
+		}
 	} else {
-		send_rf24_cmd(pipe_ledlamp, 'L', val, 0, 0);
+		while (retry-- && send_rf24_cmd(pipe_ledlamp, 'L', val, 0, 0)) {
+			usleep(10000);
+		}
 	}
 }
 
@@ -145,6 +164,44 @@ void ledstrip_reply(uint8_t *p)
 			break;
 		default:
 			UNK
+	}
+}
+
+static void mailbox_command(char *cmdbuf)
+{
+	char *p = cmdbuf + strlen("MAILBOX ");
+
+	if (!strncmp(p, "query", strlen("query"))) {
+		send_rf24_cmd(pipe_mailbox, 'Q', 0, 0, 0);
+	}
+}
+
+static void mailbox_message(uint8_t *p)
+{
+#undef UNK
+#define UNK  printf("Unknown mailbox message %c %c %c %c\n", p[0], p[1], p[2], p[3]);
+	switch (p[0]) {
+		case 'L':
+			// light level
+			switch (p[1]) {
+				case 'N':
+					printf("Mailbox light level %d\n", p[2] | p[3] << 8);
+					break;
+				default:
+					UNK;
+			}
+			break;
+		case 'I':
+			if (!memcmp(p, "IRQ", 4)) {
+				printf("Mailbox opened notification!\n");
+				system("date");
+				system("/root/home-monitoring-client/mailbox/received_mail.sh");
+			} else {
+				UNK;
+			}
+			break;
+		default:
+			UNK;
 	}
 }
 
@@ -235,11 +292,15 @@ void loop(void)
 				sprintf(gas_cmd, "curl -s http://192.168.1.6:5000/update/gas/pulse/%d\n", *((uint16_t *)data));
 				printf("gas/pulse/%d\n",*((uint16_t *)data)); 
 				system(gas_cmd);
+				break;
 			case PIPE_LEDSTRIP_ID:
 				ledstrip_reply(data);
 				break;
 			case PIPE_LEDLAMP_ID:
 				ledlamp_reply(data);
+				break;
+			case PIPE_MAILBOX_ID:
+				mailbox_message(data);
 				break;
 			default:
 				printf("Received message on unknown pipe id %d: %c %c %c %c\n", pipe, data[0], data[1], data[2], data[3]);
@@ -247,14 +308,21 @@ void loop(void)
 	}
 
 	if (poll(&input, 1, 1)) {
-		// Data to read on stdin
-		fgets(cmdbuf, sizeof(cmdbuf), stdin);
+		if (!fgets(cmdbuf, sizeof(cmdbuf), stdin)) {
+			usleep(1000);
+		}
 
 		if (!strncmp(cmdbuf, "LEDSTRIP ", strlen("LEDSTRIP "))) {
 			led_strip_command(cmdbuf);
 		} else if (!strncmp(cmdbuf, "LEDLAMP ", strlen("LEDLAMP "))) {
 			led_lamp_command(cmdbuf);
+		} else if (!strncmp(cmdbuf, "MAILBOX ", strlen("MAILBOX "))) {
+			mailbox_command(cmdbuf);
+		} else if (!strncmp(cmdbuf, "RADIO", strlen("RADIO"))) {
+			radio.printDetails();
 		}
+
+		cmdbuf[0] = 0;
 	}
 
 	usleep(1000);
