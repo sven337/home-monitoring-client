@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <poll.h>
 #include <errno.h>
+#include <stdarg.h>
 #include "RF24.h"
 
 using namespace std;
@@ -59,6 +60,50 @@ void setup(void)
 	usleep(1000);
 }
 
+int have_clients()
+{
+	return 1;
+}
+
+void send_to_clients(const char *buf, int len)
+{
+	unsigned int i;
+	for (i = 0; i < sizeof(clients)/sizeof(clients[0]); i++) {
+		if (clients[i]) {
+			if (sendto(sockfd, buf, len, 0, (struct sockaddr *)clients[i], sizeof(struct sockaddr_in)) == -1) {
+				perror("sendto");
+				return;
+			}
+		}
+	}
+}
+
+
+void hvprintf(const char *fmt, va_list args)
+{
+	char *str;
+	vasprintf(&str, fmt, args);
+
+	printf("%s", str);
+
+	if (have_clients()) {
+		send_to_clients(str, strlen(str));
+	} else {
+		// XXX what do we do here?
+	}
+	free(str);
+}
+
+// "Hub" printf
+void hprintf(const char *fmt, ...) 
+{
+	va_list args;
+
+	va_start(args, fmt);
+	hvprintf(fmt, args);
+	va_end(args);
+}
+
 int send_rf24_cmd(uint64_t addr, uint8_t param0, uint8_t param1, uint8_t param2, uint8_t param3)
 {
 	uint8_t payload[4];
@@ -68,7 +113,7 @@ int send_rf24_cmd(uint64_t addr, uint8_t param0, uint8_t param1, uint8_t param2,
 	payload[2] = param2;
 	payload[3] = param3;
 
-	printf("send rf24...");
+	hprintf("send rf24...");
 	radio.stopListening();
 	usleep(1000);
 	radio.openWritingPipe(addr);
@@ -77,15 +122,16 @@ int send_rf24_cmd(uint64_t addr, uint8_t param0, uint8_t param1, uint8_t param2,
 	bool ok = radio.write(&payload[0], 4);
 
 	if (ok) {
-		printf("... successful\n");
+		hprintf("... successful\n");
 		ret = 0;
 	} else {
-		printf("... could not send RF24 cmd\n");
+		hprintf("... could not send RF24 cmd\n");
 	}
 	radio.startListening();
 	usleep(10000);
 	return ret;
 }
+
 
 void led_strip_command(char *cmdbuf)
 {
@@ -136,19 +182,19 @@ void led_lamp_command(char *cmdbuf)
 
 void ledstrip_reply(uint8_t *p)
 {
-#define UNK  printf("Unknown ledstrip reply %c %c %c %c\n", p[0], p[1], p[2], p[3]);
+#define UNK  hprintf("Unknown ledstrip reply %c %c %c %c\n", p[0], p[1], p[2], p[3]);
 	switch (p[0]) {
 		case 'S':
 			// sequence feedback
-			printf("Ledstrip playing sequence %d, at %d seconds\n", p[1], p[2] | p[3] << 8);
+			hprintf("Ledstrip playing sequence %d, at %d seconds\n", p[1], p[2] | p[3] << 8);
 			break;
 		case 'F':
 			// fast mode
-			printf("Ledstrip fast mode = %d\n", p[1]);
+			hprintf("Ledstrip fast mode = %d\n", p[1]);
 			break;
 		case 'L':
 			// light level event
-			printf("Ledstrip duty cycle %d %d %d\n", p[1], p[2], p[3]);
+			hprintf("Ledstrip duty cycle %d %d %d\n", p[1], p[2], p[3]);
 			break;
 		default:
 			UNK
@@ -167,13 +213,13 @@ static void mailbox_command(char *cmdbuf)
 static void mailbox_message(uint8_t *p)
 {
 #undef UNK
-#define UNK  printf("Unknown mailbox message %c %c %c %c\n", p[0], p[1], p[2], p[3]);
+#define UNK  hprintf("Unknown mailbox message %c %c %c %c\n", p[0], p[1], p[2], p[3]);
 	switch (p[0]) {
 		case 'L':
 			// light level
 			switch (p[1]) {
 				case 'N':
-					printf("Mailbox light level %d\n", p[2] | p[3] << 8);
+					hprintf("Mailbox light level %d\n", p[2] | p[3] << 8);
 					break;
 				default:
 					UNK;
@@ -181,7 +227,7 @@ static void mailbox_message(uint8_t *p)
 			break;
 		case 'I':
 			if (!memcmp(p, "IRQ", 4)) {
-				printf("Mailbox opened notification!\n");
+				hprintf("Mailbox opened notification!\n");
 				system("date");
 				system("/root/home-monitoring-client/mailbox/received_mail.sh");
 			} else {
@@ -196,22 +242,22 @@ static void mailbox_message(uint8_t *p)
 void ledlamp_reply(uint8_t *p)
 {
 #undef UNK
-#define UNK  printf("Unknown ledlamp reply %c %c %c %c\n", p[0], p[1], p[2], p[3]);
+#define UNK  hprintf("Unknown ledlamp reply %c %c %c %c\n", p[0], p[1], p[2], p[3]);
 	switch (p[0]) {
 		case 'T':
 			// thermal event
 			switch (p[1]) {
 				case 'E':
-					printf("Ledlamp thermal emergency, temp is %d\n", p[2] | p[3] << 8);
+					hprintf("Ledlamp thermal emergency, temp is %d\n", p[2] | p[3] << 8);
 					break;
 				case 'A':
-					printf("Ledlamp thermal alarm, temp is %d\n", p[2] | p[3] << 8);
+					hprintf("Ledlamp thermal alarm, temp is %d\n", p[2] | p[3] << 8);
 					break;
 				case '0':
-					printf("Ledlamp thermal stand down from alarm, temp is %d\n", p[2] | p[3] << 8);
+					hprintf("Ledlamp thermal stand down from alarm, temp is %d\n", p[2] | p[3] << 8);
 					break;
 				case 'N':
-					printf("Ledlamp thermal notify: temp is %d\n", p[2] | p[3] << 8);
+					hprintf("Ledlamp thermal notify: temp is %d\n", p[2] | p[3] << 8);
 					break;
 				default:
 					UNK
@@ -221,10 +267,10 @@ void ledlamp_reply(uint8_t *p)
 			// remote command reply
 			switch (p[1]) {
 				case 'O':
-					printf("Ledlamp remote reply: lamp is off\n");
+					hprintf("Ledlamp remote reply: lamp is off\n");
 					break;
 				case '1':
-					printf("Ledlamp remote reply: lamp is on, light level target %d\n", p[2] | p[3] << 8);
+					hprintf("Ledlamp remote reply: lamp is on, light level target %d\n", p[2] | p[3] << 8);
 					break;
 				default:
 					UNK
@@ -234,13 +280,13 @@ void ledlamp_reply(uint8_t *p)
 			// light duty cycle event
 			switch (p[1]) {
 				case 'I':
-					printf("Ledlamp increased power, duty cycle %d\n", p[2]);
+					hprintf("Ledlamp increased power, duty cycle %d\n", p[2]);
 					break;
 				case 'D':
-					printf("Ledlamp decreased power, duty cycle %d\n", p[2]);
+					hprintf("Ledlamp decreased power, duty cycle %d\n", p[2]);
 					break;
 				case 'N':
-					printf("Ledlamp current duty cycle notify: %d\n", p[2]);
+					hprintf("Ledlamp current duty cycle notify: %d\n", p[2]);
 					break;
 				default:
 					UNK
@@ -250,7 +296,7 @@ void ledlamp_reply(uint8_t *p)
 			// light level event
 			switch (p[1]) {
 				case 'N':
-					printf("Ledlamp current light level notify: %d\n", p[2]);
+					hprintf("Ledlamp current light level notify: %d\n", p[2]);
 					break;
 				default:
 					UNK
@@ -313,19 +359,13 @@ void read_client_command(int fd, char *buf, int sz)
 	buf[len] = 0;
 
 	printf("Got client command %s\n", buf);
-}
-
-void send_to_clients(const char *buf, int len)
-{
-	unsigned int i;
-	for (i = 0; i < sizeof(clients)/sizeof(clients[0]); i++) {
-		if (clients[i]) {
-			if (sendto(sockfd, buf, len, 0, (struct sockaddr *)clients[i], sizeof(struct sockaddr_in)) == -1) {
-				perror("sendto");
-				return;
-			}
-		}
+	if (si_from.sin_family != AF_INET) {
+		// Localhost comes from netlink and not UDP, why the hell?!
+		return;
 	}
+
+	add_client(&si_from);
+
 }
 
 void loop(void)
