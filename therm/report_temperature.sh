@@ -15,6 +15,10 @@ while read curline; do
 		if($CRC && find "$curline" "t=") then
 			TEMP=`echo $curline|cut -d'=' -f 2`
 #Divide by 1000 and report
-			echo temperature/$(echo $TEMP | head -c 2).$(echo $TEMP | tail -c +3) | /root/home-monitoring-client/data/report_to_hm_web.sh >/dev/null
+			TEMP=$(echo $TEMP | head -c 2).$(echo $TEMP | tail -c +3)
+			if [ `python -c "print(int($TEMP))"` -lt 15 ]; then
+				(date; cat $file)
+			fi
+			echo temperature/$TEMP | /root/home-monitoring-client/data/report_to_hm_web.sh >/dev/null
 		fi
 done <$file
