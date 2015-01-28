@@ -132,6 +132,7 @@ int send_rf24_cmd(uint64_t addr, uint8_t param0, uint8_t param1, uint8_t param2,
 	return ret;
 }
 
+#define MATCHSTR(BUF,STR) !strncmp(BUF, STR, strlen(STR))
 
 void led_strip_command(char *cmdbuf)
 {
@@ -152,7 +153,7 @@ void led_strip_command(char *cmdbuf)
 
 	unsigned int i;
 	for (i = 0; i < sizeof(led_strip_commands)/sizeof(led_strip_commands[0]); i++) {
-		if (!strncmp(led_strip_commands[i].cmd, p, strlen(led_strip_commands[i].cmd))) {
+		if (MATCHSTR(p,led_strip_commands[i].cmd)) {
 			send_rf24_cmd(pipe_ledstrip, led_strip_commands[i].p0, led_strip_commands[i].p1, 0, 0);
 			return;
 		}
@@ -165,11 +166,11 @@ void led_lamp_command(char *cmdbuf)
 	int val = atoi(p);
 	int retry = 3;
 
-	if (!strncmp(p, "query", strlen("query"))) {
+	if (MATCHSTR(p, "query")) {
 		while (retry-- && send_rf24_cmd(pipe_ledlamp, 'Q', 0, 0, 0)) {
 			usleep(10000);
 		}
-	} else if (!strncmp(p, "fade", strlen("fade"))) {
+	} else if (MATCHSTR(p, "fade")) {
 		while (retry-- && send_rf24_cmd(pipe_ledlamp, 'F', 0, 0, 0)) {
 			usleep(10000);
 		}
@@ -205,7 +206,7 @@ static void mailbox_command(char *cmdbuf)
 {
 	char *p = cmdbuf + strlen("MAILBOX ");
 
-	if (!strncmp(p, "query", strlen("query"))) {
+	if (MATCHSTR(p, "query")) {
 		send_rf24_cmd(pipe_mailbox, 'Q', 0, 0, 0);
 	}
 }
@@ -404,23 +405,23 @@ void loop(void)
 		}
 	}
 
-	if (poll(&input[0], 1, 1)) {
+	if (poll(&input[0], 1, 2)) {
 		read_client_command(sockfd, cmdbuf, sizeof(cmdbuf));
 
-		if (!strncmp(cmdbuf, "LEDSTRIP ", strlen("LEDSTRIP "))) {
+		if (MATCHSTR(cmdbuf, "LEDSTRIP ")) {
 			led_strip_command(cmdbuf);
-		} else if (!strncmp(cmdbuf, "LEDLAMP ", strlen("LEDLAMP "))) {
+		} else if (MATCHSTR(cmdbuf, "LEDLAMP ")) {
 			led_lamp_command(cmdbuf);
-		} else if (!strncmp(cmdbuf, "MAILBOX ", strlen("MAILBOX "))) {
+		} else if (MATCHSTR(cmdbuf, "MAILBOX ")) {
 			mailbox_command(cmdbuf);
-		} else if (!strncmp(cmdbuf, "RADIO", strlen("RADIO"))) {
+		} else if (MATCHSTR(cmdbuf, "RADIO")) {
 			radio.printDetails();
+		} else if (MATCHSTR(cmdbuf, "PING")) {
+			hprintf("PONG\n");
 		}
 
 		cmdbuf[0] = 0;
 	}
-
-	usleep(1000);
 }
 
 int create_socket(void)
