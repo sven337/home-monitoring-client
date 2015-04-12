@@ -310,6 +310,47 @@ void ledlamp_reply(uint8_t *p)
 		
 }
 
+static void gas_message(uint8_t *p)
+{
+	char buf[1000];
+	static uint16_t old_pulse = 0;
+	uint16_t value;
+#undef UNK
+#define UNK  hprintf("Unknown gas message %c %c %c %c\n", p[0], p[1], p[2], p[3]);
+	switch (p[0]) {
+		case 'P':
+			value = p[1] << 8 | p[2];
+			old_pulse = value;
+			sprintf(buf, "curl -s http://192.168.1.6:5000/update/gas/pulse/%d\n", value);
+			system(buf);
+			snprintf(buf, 1000, "gas/pulse/%d\n", value); 
+			send_to_clients(buf, strlen(buf) + 1);
+			break;
+		case 'B':
+			value = p[2] << 8 | p[3];
+			switch (p[1]) {
+				case 'L':
+					hprintf("Gas meter LOW battery: %fV\n", 2*value*3.3f/1024);
+					break;
+				case 'N':
+					hprintf("Gas meter battery level: %fV\n", 2*value*3.3f/1024);
+					if (old_pulse) {
+						// Send a fake pulse update: if we're getting a ping it means we haven't had a pulse  for a while
+						sprintf(buf, "curl -s http://192.168.1.6:5000/update/gas/pulse/%d\n", old_pulse);
+						system(buf);
+						snprintf(buf, 1000, "gas/pulse/%d\n", value); 
+						send_to_clients(buf, strlen(buf) + 1);
+					}
+					break;
+				default: 
+					UNK
+			}
+			break;
+		default:
+			UNK
+	}
+}
+
 int find_client(unsigned long addr)
 {
 	unsigned int i;
@@ -376,7 +417,6 @@ void loop(void)
 	struct pollfd input[] = {{ sockfd, POLLIN, 0 }};
 	char cmdbuf[150];
 	char buf[1000];
-	char gas_cmd[400];
 
 	 while (radio.available(&pipe)) {
 
@@ -384,10 +424,7 @@ void loop(void)
 
 		switch (pipe) {
 			case PIPE_GAZ_ID:
-				sprintf(gas_cmd, "curl -s http://192.168.1.6:5000/update/gas/pulse/%d\n", *((uint16_t *)data));
-				system(gas_cmd);
-				snprintf(buf, 1000, "gas/pulse/%d\n",*((uint16_t *)data)); 
-				send_to_clients(buf, strlen(buf) + 1);
+				gas_message(data);
 				break;
 			case PIPE_LEDSTRIP_ID:
 				ledstrip_reply(data);
