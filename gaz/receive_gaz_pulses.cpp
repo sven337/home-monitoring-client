@@ -24,11 +24,13 @@ const uint64_t pipe_gaz 	 = 0xF0F0F0F0F0LL;
 const uint64_t pipe_ledstrip = 0xF0F0F0F0F1LL;
 const uint64_t pipe_ledlamp  = 0xF0F0F0F0F2LL;
 const uint64_t pipe_mailbox  = 0xF0F0F0F0F3LL;
+const uint64_t pipe_thermometer  = 0xF0F0F0F0F4LL;
 
 #define PIPE_GAZ_ID 1
 #define PIPE_LEDSTRIP_ID 2
 #define PIPE_LEDLAMP_ID 3
 #define PIPE_MAILBOX_ID 4
+#define PIPE_THERMOMETER_ID 5
 
 // CE and CSN pins On header using GPIO numbering (not pin numbers)
 RF24 radio(BCM2835_SPI_CS_GPIO18, 8, BCM2835_SPI_SPEED_2MHZ);
@@ -51,6 +53,7 @@ void setup(void)
 	radio.openReadingPipe(PIPE_LEDSTRIP_ID, pipe_ledstrip);
 	radio.openReadingPipe(PIPE_LEDLAMP_ID, pipe_ledlamp);
 	radio.openReadingPipe(PIPE_MAILBOX_ID, pipe_mailbox);
+	radio.openReadingPipe(PIPE_THERMOMETER_ID, pipe_thermometer);
 	usleep(1000);
 
 	// Start Listening
@@ -128,7 +131,8 @@ int send_rf24_cmd(uint64_t addr, uint8_t param0, uint8_t param1, uint8_t param2,
 		hprintf("... could not send RF24 cmd\n");
 	}
 	radio.startListening();
-	usleep(10000);
+	// Sleep for a long time to let capacitor recover......... :(
+	usleep(100000);
 	return ret;
 }
 
@@ -164,19 +168,19 @@ void led_lamp_command(char *cmdbuf)
 {
 	char *p = cmdbuf + strlen("LEDLAMP ");
 	int val = atoi(p);
-	int retry = 3;
+	int retry = 1;
 
 	if (MATCHSTR(p, "query")) {
 		while (retry-- && send_rf24_cmd(pipe_ledlamp, 'Q', 0, 0, 0)) {
-			usleep(10000);
+			usleep(30000);
 		}
 	} else if (MATCHSTR(p, "fade")) {
 		while (retry-- && send_rf24_cmd(pipe_ledlamp, 'F', 0, 0, 0)) {
-			usleep(10000);
+			usleep(30000);
 		}
 	} else {
 		while (retry-- && send_rf24_cmd(pipe_ledlamp, 'L', val, 0, 0)) {
-			usleep(10000);
+			usleep(30000);
 		}
 	}
 }
@@ -215,6 +219,9 @@ static void mailbox_message(uint8_t *p)
 {
 #undef UNK
 #define UNK  hprintf("Unknown mailbox message %c %c %c %c\n", p[0], p[1], p[2], p[3]);
+	uint16_t value;
+	float volt, level;
+	char buf[1000];
 	switch (p[0]) {
 		case 'L':
 			// light level
@@ -235,6 +242,61 @@ static void mailbox_message(uint8_t *p)
 				UNK;
 			}
 			break;
+		case 'B':
+			value = p[2] << 8 | p[3];
+			volt = 2*value*3.3f/1024;
+			level = (volt-3.3)/(4.5-3.3); // 3.3V = 0% (cutoff)
+			switch (p[1]) {
+				case 'N':
+					hprintf("Mailbox meter battery level: %fV = %f%%\n", volt, 100*level);
+					sprintf(buf, "echo battery_level/mailbox/%d | /root/home-monitoring-client/data/report_to_hm_web.sh", (int)(100*level));
+					system(buf);
+					break;
+				default:
+					UNK;
+			}
+			break;
+		default:
+			UNK;
+	}
+}
+
+static void therm_message(uint8_t *p)
+{
+#undef UNK
+#define UNK  hprintf("Unknown thermometer message %c %c %c %c\n", p[0], p[1], p[2], p[3]);
+	char buf[1000];
+	uint16_t value;
+	int16_t temperature;
+	float volt, level;
+	switch (p[0]) {
+		case 'B':
+			value = p[2] << 8 | p[3];
+			volt = value*3.3f/1024; //no voltage divider so no 2*
+			level = (volt-0.8)/(1.5-0.8); //boost cutoff at 0.8
+			switch (p[1]) {
+				case 'N':
+					hprintf("Thermometer battery level: %fV = %f%% n", volt, 100*level);
+					sprintf(buf, "echo battery_level/exterior_thermometer/%d | /root/home-monitoring-client/data/report_to_hm_web.sh", (int)(100*level));
+					system(buf);
+					break;
+				default:
+					UNK;
+			}
+			break;
+		case 'T':
+			temperature = p[2] << 8 | p[3];
+			switch (p[1]) {
+				case 'N':
+					hprintf("Thermometer temperature: %f°C\n", temperature/16.0f);
+					system("date");
+					sprintf(buf, "echo temperature/exterior/%f | /root/home-monitoring-client/data/report_to_hm_web.sh", temperature/16.0f);
+					system(buf);
+					break;
+				default:
+					UNK;
+			}
+			break;
 		default:
 			UNK;
 	}
@@ -242,6 +304,8 @@ static void mailbox_message(uint8_t *p)
 
 void ledlamp_reply(uint8_t *p)
 {
+	char buf[1000];
+	float temperature;
 #undef UNK
 #define UNK  hprintf("Unknown ledlamp reply %c %c %c %c\n", p[0], p[1], p[2], p[3]);
 	switch (p[0]) {
@@ -303,6 +367,21 @@ void ledlamp_reply(uint8_t *p)
 					UNK
 			}
 			break;
+		case 'A':
+			// ambiant event
+			switch (p[1]) {
+				case 'N':
+
+					temperature = (p[2] << 8 | p[3]) / 100.0;
+					hprintf("Ledlamp ambient temperature %f\n", temperature);
+					system("date");
+					sprintf(buf, "echo temperature/officeAH/%f | /root/home-monitoring-client/data/report_to_hm_web.sh", temperature);
+					system(buf);
+					break;
+				default:
+					UNK
+			}
+			break;
 
 		default:
 			UNK
@@ -315,32 +394,37 @@ static void gas_message(uint8_t *p)
 	char buf[1000];
 	static uint16_t old_pulse = 0;
 	uint16_t value;
+	float volt, level;
 #undef UNK
 #define UNK  hprintf("Unknown gas message %c %c %c %c\n", p[0], p[1], p[2], p[3]);
 	switch (p[0]) {
 		case 'P':
 			value = p[1] << 8 | p[2];
 			old_pulse = value;
-			sprintf(buf, "curl -s http://192.168.1.6:5000/update/gas/pulse/%d\n", value);
+			sprintf(buf, "curl -s http://192.168.0.6:5000/update/gas/pulse/%d\n", value);
 			system(buf);
 			snprintf(buf, 1000, "gas/pulse/%d\n", value); 
 			send_to_clients(buf, strlen(buf) + 1);
 			break;
 		case 'B':
 			value = p[2] << 8 | p[3];
+			volt = 2*value*3.3f/1024;
+			level = (volt-3.3)/(4.5-3.3); // 3.3V = 0% (cutoff)
 			switch (p[1]) {
 				case 'L':
-					hprintf("Gas meter LOW battery: %fV\n", 2*value*3.3f/1024);
+					hprintf("Gas meter LOW battery: %fV\n", volt);
 					break;
 				case 'N':
-					hprintf("Gas meter battery level: %fV\n", 2*value*3.3f/1024);
+					hprintf("Gas meter battery level: %fV = %f%%\n", volt, 100*level);
 					if (old_pulse) {
 						// Send a fake pulse update: if we're getting a ping it means we haven't had a pulse  for a while
-						sprintf(buf, "curl -s http://192.168.1.6:5000/update/gas/pulse/%d\n", old_pulse);
+						sprintf(buf, "curl -s http://192.168.0.6:5000/update/gas/pulse/%d\n", old_pulse);
 						system(buf);
 						snprintf(buf, 1000, "gas/pulse/%d\n", value); 
 						send_to_clients(buf, strlen(buf) + 1);
 					}
+					sprintf(buf, "echo battery_level/gas/%d | /root/home-monitoring-client/data/report_to_hm_web.sh", (int)(100*level));
+					system(buf);
 					break;
 				default: 
 					UNK
@@ -434,6 +518,9 @@ void loop(void)
 				break;
 			case PIPE_MAILBOX_ID:
 				mailbox_message(data);
+				break;
+			case PIPE_THERMOMETER_ID:
+				therm_message(data);
 				break;
 			default:
 				fprintf(stderr, "Received message on unknown pipe id %d: %c %c %c %c\n", pipe, data[0], data[1], data[2], data[3]);
