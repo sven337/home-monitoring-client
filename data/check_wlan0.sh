@@ -2,7 +2,6 @@
 
 unload_modules()
 {
-	netctl stop wlan0-NEUF_01F8
 	rmmod rt2800usb
 	rmmod rt2x00usb
 }
@@ -19,18 +18,13 @@ load_modules()
 	modprobe rt2800usb
 }
 
-restart_connection()
-{
-	netctl stop wlan0-NEUF_01F8
-	netctl start wlan0-NEUF_01F8
-}
-
 reconnect()
 {
-	unload_modules
-	cycle_port_power
-	load_modules
-	restart_connection
+	netctl-auto disable-all
+#	unload_modules
+#	cycle_port_power
+#	load_modules
+	netctl-auto enable-all
 }
 
 ADDR=$(ip addr show dev wlan0)
