@@ -2,7 +2,6 @@ CC=gcc
 FUSE_CFLAGS=-D_FILE_OFFSET_BITS=64
 CFLAGS=-Wall -g -std=gnu99 -DDEBUG $(FUSE_CFLAGS)
 EXEC=ti_cat cksum
-LDFLAGS=-pthread -lfuse
 
 all: $(EXEC)
 
