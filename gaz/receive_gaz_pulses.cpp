@@ -269,33 +269,37 @@ static void therm_message(uint8_t *p)
 	uint16_t value;
 	int16_t temperature;
 	float volt, level;
+	const char *location = "";
+
+	switch (p[1]) {
+		case 'N':
+			location = "exterior";
+			break;
+		case 'K':
+			location = "kidbed";
+			break;
+		case 'L':
+			location = "living";
+			break;
+		default:
+			UNK;
+	}
+
 	switch (p[0]) {
 		case 'B':
 			value = p[2] << 8 | p[3];
 			volt = value*3.3f/1024; //no voltage divider so no 2*
 			level = (volt-0.8)/(1.5-0.8); //boost cutoff at 0.8
-			switch (p[1]) {
-				case 'N':
-					hprintf("Thermometer battery level: %fV = %f%% n", volt, 100*level);
-					sprintf(buf, "echo battery_level/exterior_thermometer/%d | /root/home-monitoring-client/data/report_to_hm_web.sh", (int)(100*level));
-					system(buf);
-					break;
-				default:
-					UNK;
-			}
+			hprintf("Thermometer battery level: %fV = %f%% n", volt, 100*level);
+			sprintf(buf, "echo battery_level/%s_thermometer/%d | /root/home-monitoring-client/data/report_to_hm_web.sh", location, (int)(100*level));
+			system(buf);
 			break;
 		case 'T':
 			temperature = p[2] << 8 | p[3];
-			switch (p[1]) {
-				case 'N':
-					hprintf("Thermometer temperature: %f°C\n", temperature/16.0f);
-					system("date");
-					sprintf(buf, "echo temperature/exterior/%f | /root/home-monitoring-client/data/report_to_hm_web.sh", temperature/16.0f);
-					system(buf);
-					break;
-				default:
-					UNK;
-			}
+			hprintf("Thermometer temperature: %f°C\n", temperature/16.0f);
+			system("date");
+			sprintf(buf, "echo temperature/%s/%f | /root/home-monitoring-client/data/report_to_hm_web.sh", location, temperature/16.0f);
+			system(buf);
 			break;
 		default:
 			UNK;
@@ -361,7 +365,7 @@ void ledlamp_reply(uint8_t *p)
 			// light level event
 			switch (p[1]) {
 				case 'N':
-					hprintf("Ledlamp current light level notify: %d\n", p[2]);
+					printf("Ledlamp current light level notify: %d\n", p[2]);
 					break;
 				default:
 					UNK
